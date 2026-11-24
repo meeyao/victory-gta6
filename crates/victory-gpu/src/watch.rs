@@ -247,6 +247,12 @@ fn ask_run(j: &mut Journal, pieces: &[(usize, usize)]) {
 fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     use windows_sys::Win32::System::Memory::GetWriteWatch;
     const WRITE_WATCH_FLAG_RESET: u32 = 1;
+    // A range with a read-only guarded block is view memory, which cannot be
+    // write-watched: the kernel walks it and fails (1.2-1.7 s a world frame
+    // through this path alone). The guard's fault log answers `writes`.
+    if guards().protected.range(first..last).next().is_some() {
+        return false;
+    }
     let mut count = (last - first) * PAGE / KERNEL_PAGE;
     j.found.resize(count.max(j.found.len()), 0);
     let mut granularity = 0;
