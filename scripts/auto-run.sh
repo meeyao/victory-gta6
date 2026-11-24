@@ -32,17 +32,23 @@ sleep 2
 run=0
 same_stall=0
 best_frame=0
+best_fps=0
 while [ "$run" -lt "$max_runs" ]; do
     run=$((run + 1))
     now=$(date +%s)
     list=$(cat "$skips")
     log=$work/run-$run.log
-    echo "=== run $run  $(date -Is)  loop=$loop_limit  skips=$list" >>"$ledger"
+    sha=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)
+    echo "=== run $run  $(date -Is)  sha=$sha  exe=$(basename "$exe")  loop=$loop_limit  skips=$list" >>"$ledger"
 
     export VICTORY_LOG='info,victory_gpu::pipeline=debug'
     export VICTORY_NO_WATCHDOG=1
     export VICTORY_SHADER_LOOP_LIMIT="$loop_limit"
     export VKD3D_DISABLE_EXTENSIONS=VK_NV_raw_access_chains
+    export VKD3D_SHADER_CACHE_PATH="$HOME/.cache/victory-vkd3d"
+    # xcl-dev/xcl#1701: shared fences hang under vkd3d-proton and the title's
+    # watchdog kills it at +0x2215c35, the site this tree disables entirely.
+    export VKD3D_CONFIG=ignore_shared_fence
     export VICTORY_TEXTURE_NO_WAIT=1
     export VICTORY_LATE_WAIT=3
     export VICTORY_RELAY=2
@@ -85,9 +91,10 @@ while [ "$run" -lt "$max_runs" ]; do
     frame=${frame:-0}
     fps=$(grep -oE '[0-9.]+ fps' "$log" | tail -1 | cut -d' ' -f1)
     fps=${fps:-0}
-    echo "result frame=$frame fps=$fps stalled=$stalled" >>"$ledger"
+    echo "result frame=$frame fps=$fps best_frame=$best_frame best_fps=${best_fps:-0} stalled=$stalled" >>"$ledger"
     if [ "$frame" -gt "$best_frame" ]; then
         best_frame=$frame
+        best_fps=$fps
         same_stall=0
     fi
 
