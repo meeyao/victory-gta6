@@ -244,6 +244,19 @@ Do **not** set `VICTORY_D3D12_DRED` for normal play: measured at ~2.5× cost in 
 - The title's crash reporter tries to upload a minidump to `submit.backtrace.io`; the runtime
   blocks it. Run offline if you do not want the attempt at all.
 
+### Warnings that are expected
+
+- `a pipeline creation method that is not implemented ... slot=0x1c8 / slot=0x218` — the title
+  is asking for pipeline states it serialized offline at build time
+  (`DeserializeGraphicsPipelineStateX` family; the GDK's `HlslCompile` ACO sample shows the
+  `.packet.bin` + `.vs/.ps.bin` layout). Those payloads are **native RDNA 2 microcode**, so a
+  PC GPU cannot use them. Victory answers `E_NOTIMPL`, the title falls back to building the
+  pipeline from its shaders, and that fallback is the path that renders. OpenScarlett returns a
+  placeholder PSO instead and skips those draws, which is worse for the picture. A few thousand
+  of these lines at world entry are normal.
+- `a stage of the ray-tracing structure builder, which is off` — expected while
+  `VICTORY_BVH_BUILDER` is unset; this is also why everything in shadow is black.
+
 ## What did not work (so you do not repeat it)
 
 - **Upstream/our `r12` branch**: menus and loading art only; the world stayed black because the
