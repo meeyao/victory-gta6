@@ -21,6 +21,8 @@ pub(crate) enum C {
     Queries,
     QueryUs,
     MoveUs,
+    /// Bytes copied by a plain `memcpy` instead of a kernel call.
+    MoveFast,
     Unmapped,
     /// Write-watch askings and their time.
     Watches,
@@ -1057,8 +1059,8 @@ pub(crate) fn log(frames: f64) {
     let ms = |v: f64| v / 1e3;
     tracing::info!(
         "copies per frame: {:.1} submissions; {:.0} title copies {:.1} MB; {:.0} refreshes {:.1} MB, \
-         {:.0} skipped {:.1} MB; {:.0} runs {:.1} ms; {:.0} queries {:.2} ms, moves {:.2} ms, \
-         {:.2} MB unmapped; {:.0} page faults; {:.0} watches {:.2} ms, {:.1} MB checked, {:.1} MB \
+         {:.0} skipped {:.1} MB; {:.0} runs {:.1} ms; {:.0} queries {:.2} ms, moves {:.2} ms \
+         ({:.1} MB by memcpy), {:.2} MB unmapped; {:.0} page faults; {:.0} watches {:.2} ms, {:.1} MB checked, {:.1} MB \
          unchanged; {:.1} fallbacks; {:.0} guard faults; textures {:.1} MB watched and \
          changed, {:.1} MB hashed, {:.1} MB of them changed",
         c[C::Submissions as usize],
@@ -1073,6 +1075,7 @@ pub(crate) fn log(frames: f64) {
         c[C::Queries as usize],
         ms(c[C::QueryUs as usize]),
         ms(c[C::MoveUs as usize]),
+        mb(c[C::MoveFast as usize]),
         mb(c[C::Unmapped as usize]),
         faults as f64 / frames,
         c[C::Watches as usize],

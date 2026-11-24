@@ -5455,13 +5455,18 @@ fn mapped_whole(at: usize, len: usize, write: bool) -> bool {
 /// Copies `len` bytes from `src` to `dst` unless a source page is not
 /// readable.
 fn read(src: *const u8, dst: *mut u8, len: usize) -> bool {
+    // `VirtualQuery` walks the page tables to the region's end: ~0.6 ms in
+    // the title's big pools, where most copies are under a kilobyte. Only a
+    // large read is worth the question.
     if len == 0 {
         return true;
     }
-    if mapped_whole(src as usize, len, false) {
+    if len >= (256 << 10) && mapped_whole(src as usize, len, false) {
         // SAFETY: every page of both ranges is committed and readable or
         // writable (`mapped_whole`); `dst` is ours and writable.
         unsafe { std::ptr::copy_nonoverlapping(src, dst, len) };
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::MoveFast, len as u64);
         return true;
     }
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
@@ -5554,6 +5559,8 @@ pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
             unsafe {
                 std::ptr::copy_nonoverlapping(src.wrapping_add(at - dst as usize), at as *mut u8, to - at)
             };
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::add(crate::copystat::C::MoveFast, (to - at) as u64);
             at = to;
             continue;
         }
