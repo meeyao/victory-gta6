@@ -402,11 +402,16 @@ fn guard(start: usize, end: usize) -> Option<Vec<usize>> {
     // pages: 0.6 ms for the title's 174 MB heap, 16 times a frame, and most
     // of the 68 ms a frame of "guards" (run 58).
     // `VICTORY_GUARD_ASK=1` asks every time, as before.
+    //
+    // Any protected block of the range proves it is a view, not just the
+    // first: a write through the runtime opens the block it wrote (`open`),
+    // and a range that begins there asked Windows again at every submission
+    // (the 174 MB heap: 41 asks a frame, ~1 ms each).
     static ASK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let known = !*ASK.get_or_init(|| std::env::var_os("VICTORY_GUARD_ASK").is_some_and(|v| v == "1")) && {
         let g = guards();
-        let first = start / BLOCK;
-        g.protected.contains(&first) || g.absent.contains(&first)
+        let (first, last) = (start / BLOCK, end.div_ceil(BLOCK));
+        g.protected.range(first..last).next().is_some() || g.absent.contains(&first)
     };
     if !known && !is_view(start, end) {
         return None;
