@@ -111,6 +111,8 @@ git checkout 6a2d9f9
 
 # apply the DXC fallback (from this repository's patches/ directory)
 git apply /path/to/dxc-clamp-fallback.patch
+# and, for runs longer than a few minutes, the title's watchdog hooks
+git apply /path/to/watchdog-hooks.patch
 
 cargo xwin build --profile diag --features diagnostics \
     -p victory --target x86_64-pc-windows-msvc --locked
@@ -233,8 +235,8 @@ Do **not** set `VICTORY_D3D12_DRED` for normal play: measured at ~2.5× cost in 
   "Continue" and it dies in ~40 s at `+0x164a298` (read `0x2c`) — a different failure that looks
   like a crash. Move `data/7952987A/saves` aside, or use a fresh `data_dir`.
 - **Capture frames are presented-frame numbers**, which advance even while loading. The world
-  starts around frame 4,500–5,000: captures at 3,000–4,200 are the loading key art. Ask for
-  5,000 and later.
+  starts around frame 4,000: captures at 3,000–4,200 are the loading key art, and frame 4,096
+  already had 28,708 draws. Ask for 4,100 and later.
 - **The title waits about 2 s for the GPU.** Frames longer than that eventually trip its
   "GPU Loc Sig" watchdog (we saw it at frame 7,232, right after a burst of new world
   pipelines was built). The pipeline library survives, so the next run starts warm and gets
@@ -243,6 +245,21 @@ Do **not** set `VICTORY_D3D12_DRED` for normal play: measured at ~2.5× cost in 
   builds the rest). Later runs reuse them.
 - The title's crash reporter tries to upload a minidump to `submit.backtrace.io`; the runtime
   blocks it. Run offline if you do not want the attempt at all.
+
+### Keeping a run alive
+
+The title ends its own process when it decides the GPU has stopped making progress: a
+deliberate `mov dword [0], imm32` at `+0x23cf683`, called from `+0x2215c35`, about 6–8 minutes
+after the world starts. The fork at `6a2d9f9` has **no** `VICTORY_NO_WATCHDOG` support, so the
+variable is silently ignored there and every run dies that way.
+
+`patches/watchdog-hooks.patch` adds the loader hooks from this repository: they check the
+build's hash (`b99f876b74d4a77f`) and the exact bytes, then jump over the call and NOP the
+deliberate fault. Set `VICTORY_NO_WATCHDOG=1` and the run keeps going.
+
+Do **not** patch the watchdog thread's entry point instead. That was tried: it stops the kills,
+but the title then never draws (0 shaders translated, 0 frames), because that thread also does
+work the title needs at startup.
 
 ### Warnings that are expected
 
