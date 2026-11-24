@@ -61,8 +61,20 @@ impl Pending {
     }
 
     fn make(&self) {
+        let names = || {
+            self.shaders
+                .iter()
+                .map(|s| format!("{} {}", s.stage, s.hash))
+                .collect::<Vec<_>>()
+        };
+        tracing::debug!(shaders = ?names(), "host pipeline: making");
+        let started = std::time::Instant::now();
         self.made
             .get_or_init(|| HostPipeline::new(&self.shaders, self.graphics.as_deref()));
+        let ms = started.elapsed().as_millis();
+        if ms >= 1000 {
+            tracing::warn!(ms, shaders = ?names(), "a host pipeline took a second or more");
+        }
         let (lock, done) = &DONE;
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         done.notify_all();
@@ -291,6 +303,11 @@ fn workers() -> bool {
         for i in 0..workers {
             let spawned = std::thread::Builder::new()
                 .name(format!("victory-pipelines-{i}"))
+                // The translator lowers large shaders with recursion; the
+                // default 2 MiB overflows on the world's mesh programs and
+                // takes the worker (and the pipeline the title waits for)
+                // with it.
+                .stack_size(32 << 20)
                 .spawn(|| {
                     // Below the title's own threads (loading, recording).
                     // SAFETY: a plain call on our own thread.
