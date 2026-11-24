@@ -263,6 +263,8 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
             &mut granularity,
         )
     } != 0;
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::add(crate::copystat::C::KernelUs, started.elapsed().as_micros() as u64);
     if failed {
         return false;
     }
@@ -332,6 +334,8 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
             &mut granularity,
         )
     } != 0;
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::add(crate::copystat::C::KernelUs, started.elapsed().as_micros() as u64);
     let guarded = if failed {
         count = 0;
         if !guarded {
