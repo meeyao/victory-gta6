@@ -261,6 +261,34 @@ Do **not** patch the watchdog thread's entry point instead. That was tried: it s
 but the title then never draws (0 shaders translated, 0 frames), because that thread also does
 work the title needs at startup.
 
+### Why runs went silent for ten minutes
+
+The pipeline workers ran on Rust's default 2 MiB stack. On the world's largest mesh programs the
+translator's recursion overflowed it:
+
+```
+thread 'victory-pipelines-2' has overflowed its stack
+```
+
+The worker died, the pipeline it was making never appeared, and the title waited for it forever:
+the log stopped right after `host pipeline: making shaders=["mesh …"]`, CPU stayed high, and no
+frame was presented. This is the stall that the title's own watchdog used to end with a crash.
+Fixed in this tree by giving the workers 32 MiB (`pipeline/make.rs`, `stack_size(32 << 20)`).
+A pipeline that is slow but succeeds now logs `a host pipeline took a second or more` with its
+hashes.
+
+### Driving a run to the end without a person
+
+`scripts/auto-run.sh` is a supervisor: it launches the game, watches the log's mtime, and when a
+run goes quiet for 150 s it reads the last `host pipeline: making` line, adds those shader hashes
+to `auto-runs/skips.txt`, and starts again with `VICTORY_SKIP_PIPELINES` set from that file. Every
+run appends its best frame and fps to `auto-runs/ledger.txt`; three runs without a new skip stop
+the loop. Paths come from `REPO`, `EXE`, `GAME`, `WORK` and `RUNNER`.
+
+The same pattern is how the ecosystem news is used: a five-minute watcher reports merged PRs and
+open/closed issues across the fork, upstream, XCL, TuxBox and the other compatibility layers, so a
+fix published there is visible here without a manual search.
+
 ### Warnings that are expected
 
 - `a pipeline creation method that is not implemented ... slot=0x1c8 / slot=0x218` — the title
