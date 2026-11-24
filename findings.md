@@ -350,3 +350,33 @@ the split-range watch fix and 128 MiB worker stacks:
   watchdog) and #1525 (wave-size refusals are a device-capability wall).
 - TuxBox: `docs/PROJECTSCARLETT.md` for the DXC-beside-the-executable arrangement, and
   `runtime/d3d12/src/device/rectangle.rs` for the rectangle-list algorithm.
+
+### World cost after the copy fixes (run of 2026-11-25 01:30, RTX 3070)
+
+`VICTORY_WIDE_REFRESH=1` (a submission's refreshes on the worker threads),
+512 MiB pipeline stacks, and the memcpy-per-committed-run copy:
+
+- world frames: **0.3-0.5 fps**, 2.1-3.6 s/frame; about 400-3,400 draws;
+- copies 1.1-2.1 s (of which guards 250-350 ms, write-watch asks ~0.5 s, the
+  rest the small kernel copies: ~9,000 title copies of ~600 bytes a frame,
+  where `VirtualQuery` costs ~0.6 ms and the kernel call ~6 us);
+- copy-back 0.5-1.3 s for 17-28 MB (still the kernel path: the destination
+  is view memory with holes, and a query per piece costs more than the
+  write it would save);
+- the card was about 7-14 % busy; the CPU is the frame.
+
+Two things did **not** pay off and were reverted: a whole-range `memcpy`
+(one `VirtualQuery` per copy made the frame 4 s slower), and capping the
+texture cache at 5 GiB to make room for card-memory host copies (still
+0 copies made; the 8/10 budget rule is not what starves them).
+
+### Another launcher recipe (from a tester)
+
+Proton-CachyOS Latest through `umu-run`, with `WINEDLLOVERRIDES=d3d12,d3d12core,d3dcompiler_47=n`
+and vkd3d-proton built from master beside the exe (Proton's bundled copy
+crashes RADV when the world loads), plus Microsoft's `d3dcompiler_47.dll`.
+This tree runs Proton Experimental with Proton's bundled vkd3d-proton,
+`VKD3D_DISABLE_EXTENSIONS=VK_NV_raw_access_chains`, and Microsoft's
+`dxcompiler.dll` + `dxil.dll` beside `victory.exe`. The difference is the
+vkd3d-proton build and the compiler DLL; neither changes the frame's CPU
+copies, which are what limit this host.
