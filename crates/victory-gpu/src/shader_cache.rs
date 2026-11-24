@@ -77,6 +77,10 @@ fn build() -> &'static [u8; 32] {
             );
         }
         key.update(&limit.to_le_bytes());
+        // The view heap's null slot differs by host GPU: a translation
+        // cached without the clamp must not be served.
+        crate::descriptor::host::probe_view_limit();
+        key.update(&victory_shader::emit::view_heap_limit().to_le_bytes());
         key.update(&[victory_shader::emit::group_sync()]);
         key.update(&victory_shader::emit::shader_opt().to_le_bytes());
         for name in [
