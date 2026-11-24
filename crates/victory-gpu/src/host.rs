@@ -5415,16 +5415,38 @@ pub(crate) fn read_into(src: *const u8, dst: &mut [u8]) -> bool {
 /// Copies `len` bytes from `src` to `dst` unless a source page is not
 /// readable.
 fn read(src: *const u8, dst: *mut u8, len: usize) -> bool {
-    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let mut done = 0;
+    let mut done = 0usize;
     // SAFETY: the destination is mapped writable memory of `len` bytes; the
-    // kernel checks the source.
-    unsafe { ReadProcessMemory(GetCurrentProcess(), src.cast(), dst.cast(), len, &mut done) != 0 }
+    // kernel checks the source. `NtReadVirtualMemory` is the same kernel
+    // copy `ReadProcessMemory` wraps, without the wrapper's validation of
+    // both ranges (`VICTORY_COPY_MODE=plain` measured that wrapper as most
+    // of a copy's cost here: 14k copies of 18 KiB at ~84 MB/s).
+    let status = unsafe {
+        NtReadVirtualMemory(
+            GetCurrentProcess(),
+            src.cast(),
+            dst.cast(),
+            len,
+            &mut done,
+        )
+    };
+    status >= 0 && done == len
 }
 
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "system" {
+    /// The kernel's read from a process's memory, `(process, address,
+    /// bytes, length, read out)`: an NTSTATUS, negative when a page of the
+    /// range is not there (a partial read is all it gives then).
+    fn NtReadVirtualMemory(
+        process: *mut std::ffi::c_void,
+        base: *const std::ffi::c_void,
+        buffer: *mut std::ffi::c_void,
+        size: usize,
+        read: *mut usize,
+    ) -> i32;
+
     /// The kernel's write into a process's memory, `(process, address,
     /// bytes, length, written out)`: an NTSTATUS, negative when a page of
     /// the range is not there or not writable. It changes no protection.

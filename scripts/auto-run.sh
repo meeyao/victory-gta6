@@ -31,6 +31,7 @@ sleep 2
 
 run=0
 same_stall=0
+best_frame=0
 while [ "$run" -lt "$max_runs" ]; do
     run=$((run + 1))
     now=$(date +%s)
@@ -56,10 +57,12 @@ while [ "$run" -lt "$max_runs" ]; do
     export VICTORY_KEYS=$(seq 20 5 300 | awk '{printf "%s:Enter,",$1}' | sed 's/,$//')
     mkdir -p "$VICTORY_CAPTURE"
 
-    setsid "${RUNNER:-/tmp/opencode/victory-slr.sh}" runinprefix "$exe" run "$game" --execute \
+    setsid --wait "${RUNNER:-/tmp/opencode/victory-slr.sh}" runinprefix "$exe" run "$game" --execute \
         >"$log" 2>&1 &
     pid=$!
-    echo "pid=$pid" >>"$ledger"
+    sleep 2
+    child=$(pgrep -P "$pid" | head -1)
+    echo "pid=$pid child=$child" >>"$ledger"
 
     last_progress=$now
     stalled=0
@@ -82,6 +85,10 @@ while [ "$run" -lt "$max_runs" ]; do
     fps=$(grep -oE '[0-9.]+ fps' "$log" | tail -1 | cut -d' ' -f1)
     fps=${fps:-0}
     echo "result frame=$frame fps=$fps stalled=$stalled" >>"$ledger"
+    if [ "$frame" -gt "$best_frame" ]; then
+        best_frame=$frame
+        same_stall=0
+    fi
 
     if [ "$stalled" -eq 1 ]; then
         line=$(grep -a 'host pipeline: making' "$log" | tail -1)
@@ -103,9 +110,10 @@ while [ "$run" -lt "$max_runs" ]; do
         else
             same_stall=$((same_stall + 1))
         fi
-        kill -TERM -"$pid" 2>/dev/null
+        target=${child:-$pid}
+        kill -TERM -"$target" 2>/dev/null
         sleep 3
-        kill -KILL -"$pid" 2>/dev/null
+        kill -KILL -"$target" 2>/dev/null
         if [ "$same_stall" -ge "$same_stall_limit" ]; then
             echo "stopping: the same stall survived $same_stall_limit skips" >>"$ledger"
             exit 2
