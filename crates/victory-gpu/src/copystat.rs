@@ -70,6 +70,10 @@ pub(crate) enum C {
     BackReadUs,
     BackMergeUs,
     BackWriteUs,
+    /// Bytes a put-back wrote with `memcpy`, with the kernel, and kernel calls.
+    WriteFast,
+    WriteKernel,
+    WriteCalls,
     /// Bytes copied whole because their memory is neither write-watched
     /// nor a view (`Shadow::update_free`).
     WholeBytes,
@@ -1101,7 +1105,8 @@ pub(crate) fn log(frames: f64) {
          refused, {:.1} ms searching; notes {:.1} ms; shader-written ranges: {:.0} steps in \
          {:.1} submissions, snapshots {:.1} ms, {:.1} MB compared back; sparse reads {:.1} ms; \
          guards {:.1} ms (kernel {:.1} ms); {:.1} MB copied whole (memory not watched); \
-         copy-back read {:.1} ms, merge {:.1} ms, write {:.1} ms; {:.1} frame waits \
+         copy-back read {:.1} ms, merge {:.1} ms, write {:.1} ms \
+         (memcpy {:.1} MB, kernel {:.1} MB in {:.0} calls); {:.1} frame waits \
          sleeping {:.1} ms (all threads); ranges of shaders that cannot store to buffers: \
          {:.0} steps {:.1} MB left out",
         c[C::RecordCalls as usize],
@@ -1122,6 +1127,9 @@ pub(crate) fn log(frames: f64) {
         ms(c[C::BackReadUs as usize]),
         ms(c[C::BackMergeUs as usize]),
         ms(c[C::BackWriteUs as usize]),
+        mb(c[C::WriteFast as usize]),
+        mb(c[C::WriteKernel as usize]),
+        c[C::WriteCalls as usize],
         c[C::PaceWaits as usize],
         ms(c[C::PaceUs as usize]),
         c[C::GpuWritesLeftOut as usize],

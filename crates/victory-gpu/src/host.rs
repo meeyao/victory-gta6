@@ -5584,12 +5584,20 @@ pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
                 std::ptr::copy_nonoverlapping(src.wrapping_add(at - dst as usize), at as *mut u8, to - at)
             };
             #[cfg(feature = "diagnostics")]
-            crate::copystat::add(crate::copystat::C::MoveFast, (to - at) as u64);
+            {
+                crate::copystat::add(crate::copystat::C::MoveFast, (to - at) as u64);
+                crate::copystat::add(crate::copystat::C::WriteFast, (to - at) as u64);
+            }
             at = to;
             continue;
         }
         let step = 64 << 10;
         let to = ((at / step + 1) * step).min(end);
+        #[cfg(feature = "diagnostics")]
+        {
+            crate::copystat::add(crate::copystat::C::WriteKernel, (to - at) as u64);
+            crate::copystat::add(crate::copystat::C::WriteCalls, 1);
+        }
         if !write(at, to - at) {
             for_pieces(at, to - at, 4 << 10, |at, n| {
                 write(at, n);
