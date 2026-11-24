@@ -19,10 +19,10 @@ ledger=$work/ledger.txt
 mkdir -p "$work"
 touch "$skips" "$ledger"
 
-max_runs=${MAX_RUNS:-20}
-stall_secs=${STALL_SECS:-150}
+max_runs=${MAX_RUNS:-50}
+stall_secs=${STALL_SECS:-1800}
 loop_limit=${LOOP_LIMIT:-256}
-same_stall_limit=${SAME_STALL_LIMIT:-3}
+same_stall_limit=${SAME_STALL_LIMIT:-20}
 
 # Leftovers from an earlier manual run. The script's own command line has no
 # game name, so this cannot match itself.
