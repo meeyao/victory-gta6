@@ -391,6 +391,7 @@ fills in over seconds, and every relaunch looks better. Measured here:
 | mesh-pipeline warnings | `refuses a mesh pipeline it just stored` | **none** |
 | pipelines compiled in a run | **565** made, 1329 loaded | **92** made, 1895 loaded |
 | library file | 999,800 B (no mesh entries) | 1,028,024 B and growing |
+| the next boot | — | **`made=0`, `loaded=778`** at the first save (was `made=565`) |
 
 `ID3D12PipelineLibrary1::LoadPipeline` refuses a mesh pipeline unless its
 pipeline-state stream names a primitive topology. The fork had that
