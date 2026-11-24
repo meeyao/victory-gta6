@@ -289,6 +289,17 @@ The same pattern is how the ecosystem news is used: a five-minute watcher report
 open/closed issues across the fork, upstream, XCL, TuxBox and the other compatibility layers, so a
 fix published there is visible here without a manual search.
 
+### Two test-method traps
+
+- `VICTORY_COPY_MODE=plain` is a **timing mode only**. It `memcpy`s title memory without checking
+  and faults on a reserved-but-uncommitted page (`ucrtbase` access violation, `read …: reserved,
+  never committed`). It answers "how much of the frame is the copy wrapper" for a few frames; a
+  full run must use the kernel path.
+- `VICTORY_INPLACE=2` works on this host — the probe opened a 4 MiB window, placed a buffer and the
+  GPU read 65536/65536 bytes equal — but the title's buffers are **view memory**, not private
+  committed memory, so they are refused and only the probe window is placed. In-place is not the
+  lever here until the title's allocation type is handled.
+
 ### Warnings that are expected
 
 - `a pipeline creation method that is not implemented ... slot=0x1c8 / slot=0x218` — the title
