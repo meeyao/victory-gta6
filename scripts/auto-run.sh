@@ -52,7 +52,7 @@ while [ "$run" -lt "$max_runs" ]; do
     export VICTORY_SKIP_PIPELINES="$list"
     export VICTORY_CAPTURE="$work/capture-$run"
     export VICTORY_DUMP_TARGETS=1
-    export VICTORY_CAPTURE_FRAMES='4100,4800'
+    export VICTORY_CAPTURE_FRAMES='6500,7200'
     export VICTORY_KEYS=$(seq 20 5 300 | awk '{printf "%s:Enter,",$1}' | sed 's/,$//')
     mkdir -p "$VICTORY_CAPTURE"
 
