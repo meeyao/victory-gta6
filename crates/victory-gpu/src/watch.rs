@@ -250,35 +250,21 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     let mut count = (last - first) * PAGE / KERNEL_PAGE;
     j.found.resize(count.max(j.found.len()), 0);
     let mut granularity = 0;
-    // A range whose blocks the guards made read-only cannot be write-watched
-    // (the pages are not MEM_WRITE_WATCH): the kernel walks the range and
-    // fails, 3.3 s a world frame here. The guard's fault log is the authority
-    // for such memory, so the asking is skipped.
-    let guarded_view = guarded && {
-        let g = guards();
-        g.protected.range(first..last).next().is_some()
-    };
     #[cfg(feature = "diagnostics")]
     let started = std::time::Instant::now();
     // SAFETY: the answer buffer holds `count` entries.
-    let failed = if guarded_view {
-        true
-    } else {
-        unsafe {
-            GetWriteWatch(
-                WRITE_WATCH_FLAG_RESET,
-                (first * PAGE) as *const _,
-                (last - first) * PAGE,
-                j.found.as_mut_ptr().cast(),
-                &mut count,
-                &mut granularity,
-            )
-        } != 0
-    };
+    let failed = unsafe {
+        GetWriteWatch(
+            WRITE_WATCH_FLAG_RESET,
+            (first * PAGE) as *const _,
+            (last - first) * PAGE,
+            j.found.as_mut_ptr().cast(),
+            &mut count,
+            &mut granularity,
+        )
+    } != 0;
     #[cfg(feature = "diagnostics")]
-    if !guarded_view {
-        crate::copystat::add(crate::copystat::C::KernelUs, started.elapsed().as_micros() as u64);
-    }
+    crate::copystat::add(crate::copystat::C::KernelUs, started.elapsed().as_micros() as u64);
     if failed {
         return false;
     }
@@ -349,7 +335,7 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
     let failed = if guarded_view {
         true
     } else {
-        unsafe {
+        (unsafe {
             GetWriteWatch(
                 WRITE_WATCH_FLAG_RESET,
                 (first * PAGE) as *const _,
@@ -358,7 +344,7 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
                 &mut count,
                 &mut granularity,
             )
-        } != 0
+        }) != 0
     };
     #[cfg(feature = "diagnostics")]
     if !guarded_view {
