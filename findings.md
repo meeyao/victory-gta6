@@ -1,3 +1,12 @@
+# Findings — Linux/Proton VIctory, 2026-11-24/25
+
+**Bottom line:** the world renders; it does not run playably. 0.3–0.5 fps on
+an RTX 3070 / Ryzen 7 3700X, GPU 7–14 % busy. The frame is CPU work over
+title memory (copies, write-watch, copy-back). 30 fps needs the design change
+in "What upstream has that this tree does not", not another micro-fix.
+Everything below is dated evidence: what changed, what it measured, what was
+reverted.
+
 # GTA VI (1.0.2.1, Xbox Series) on Linux/Proton — reproduction notes
 
 Date: 2026-11-24. Host: Arch/CachyOS, Ryzen 7 3700X, 32 GB, **RTX 3070 (8 GB, 32-lane waves)**,
