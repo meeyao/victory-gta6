@@ -2042,14 +2042,25 @@ impl Shadow {
         title.resize(n, 0);
         // Title memory not there: looked at again when the next flight
         // that declared the range lands (the snapshot stays as it is).
-        if !crate::host::read_into((start + at) as *const u8, title) {
+        let t_read = std::time::Instant::now();
+        let read_ok = crate::host::read_into((start + at) as *const u8, title);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackReadUs, t_read.elapsed().as_micros() as u64);
+        if !read_ok {
             return 0;
         }
-        if !merge_piece(now, held, title) {
+        let t_merge = std::time::Instant::now();
+        let merged = merge_piece(now, held, title);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackMergeUs, t_merge.elapsed().as_micros() as u64);
+        if !merged {
             return 0;
         }
+        let t_write = std::time::Instant::now();
         crate::watch::writing(start + at, n);
         crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackWriteUs, t_write.elapsed().as_micros() as u64);
         n
     }
 
@@ -2660,7 +2671,11 @@ impl Shadow {
         };
         title.clear();
         title.resize(n, 0);
+        let t_read = std::time::Instant::now();
         let mapped = crate::host::read_into((start + at) as *const u8, title);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackReadUs, t_read.elapsed().as_micros() as u64);
+        let t_merge = std::time::Instant::now();
         let mut changed = false;
         for (a, b) in outside(at, at + n, skip) {
             let (a, b) = (a - at, b - at);
@@ -2668,11 +2683,16 @@ impl Shadow {
             // the card wrote, as before; `title` is scratch then.
             changed |= merge_piece(&gpu[a..b], &mut held[a..b], &mut title[a..b]);
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackMergeUs, t_merge.elapsed().as_micros() as u64);
         if !mapped || !changed {
             return 0;
         }
+        let t_write = std::time::Instant::now();
         crate::watch::writing(start + at, n);
         crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackWriteUs, t_write.elapsed().as_micros() as u64);
         n
     }
 }
