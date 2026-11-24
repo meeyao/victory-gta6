@@ -1931,9 +1931,14 @@ impl Shadow {
                 let (at, n) = (at + first, last + 1 - first);
                 let (host, old) = (&mut host[first..=last], &old[first..=last]);
                 let title = &mut title[..n];
-                if !crate::host::read_into((start + at) as *const u8, title) {
+                let t_read = std::time::Instant::now();
+                let read_ok = crate::host::read_into((start + at) as *const u8, title);
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::add(crate::copystat::C::BackReadUs, t_read.elapsed().as_micros() as u64);
+                if !read_ok {
                     continue;
                 }
+                let t_merge = std::time::Instant::now();
                 // Title memory with the GPU's bytes put in; the copy takes
                 // the title's bytes in turn.
                 // Without a branch, so the loop runs many bytes at a time:
@@ -1948,9 +1953,14 @@ impl Shadow {
                     *t = merged;
                     *h = merged;
                 }
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::add(crate::copystat::C::BackMergeUs, t_merge.elapsed().as_micros() as u64);
                 if differs != 0 {
                     crate::watch::writing(start + at, n);
+                    let t_write = std::time::Instant::now();
                     crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+                    #[cfg(feature = "diagnostics")]
+                    crate::copystat::add(crate::copystat::C::BackWriteUs, t_write.elapsed().as_micros() as u64);
                     written += n;
                 }
             }
@@ -2567,7 +2577,11 @@ impl Shadow {
         title.clear();
         title.resize(n, 0);
         let mut written = 0;
-        if crate::host::read_into((start + at) as *const u8, title) {
+        let t_read = std::time::Instant::now();
+        let read_ok = crate::host::read_into((start + at) as *const u8, title);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::BackReadUs, t_read.elapsed().as_micros() as u64);
+        if read_ok {
             // As in `copy_back`: the card's byte where it is not what it
             // was before the submission, else the title's.
             let mut differs = 0u8;
@@ -2580,7 +2594,10 @@ impl Shadow {
             }
             if differs != 0 {
                 crate::watch::writing(start + at, n);
+                let t_write = std::time::Instant::now();
                 crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::add(crate::copystat::C::BackWriteUs, t_write.elapsed().as_micros() as u64);
                 written = n;
             }
         } else {
