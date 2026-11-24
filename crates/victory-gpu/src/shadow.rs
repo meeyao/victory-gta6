@@ -2398,7 +2398,20 @@ impl Shadow {
                 }
                 return copied;
             }
-            self.watched.store(NOT_WATCHED, Ordering::Relaxed);
+            // `GetWriteWatch` refuses a range that spans two reservations as
+            // a whole (`watch::writes` returns None). Splitting it keeps the
+            // rest of the buffer watched instead of copying all of it every
+            // frame: only the piece that cannot be watched is copied.
+            if to - from > PAGE {
+                let mid = ((from + to) / 2) & !(PAGE - 1);
+                if mid > from && mid < to {
+                    let left = self.update_free(from, mid);
+                    return left + self.update_free(mid, to);
+                }
+            }
+            if to - from > PAGE {
+                self.watched.store(NOT_WATCHED, Ordering::Relaxed);
+            }
         }
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::WholeBytes, (to - from) as u64);
