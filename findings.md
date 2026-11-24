@@ -380,3 +380,59 @@ This tree runs Proton Experimental with Proton's bundled vkd3d-proton,
 `dxcompiler.dll` + `dxil.dll` beside `victory.exe`. The difference is the
 vkd3d-proton build and the compiler DLL; neither changes the frame's CPU
 copies, which are what limit this host.
+
+### Why shaders need several boots, and the fix (2026-11-25)
+
+Reported symptom: the first start compiles part of the shader set, the image
+fills in over seconds, and every relaunch looks better. Measured here:
+
+| | before | after |
+|---|---|---|
+| mesh-pipeline warnings | `refuses a mesh pipeline it just stored` | **none** |
+| pipelines compiled in a run | **565** made, 1329 loaded | **92** made, 1895 loaded |
+| library file | 999,800 B (no mesh entries) | 1,028,024 B and growing |
+
+`ID3D12PipelineLibrary1::LoadPipeline` refuses a mesh pipeline unless its
+pipeline-state stream names a primitive topology. The fork had that
+subobject (`578d459`); resolving the zero-padding cherry-pick (Pablo's #1683
+fix) deleted the field and left its comment, so every mesh pipeline was
+compiled at every start (1–3 s each) and draws whose pipeline was not ready
+were dropped (`dropped 1098 without a host pipeline`). Restoring
+`PRIMITIVE_TOPOLOGY(TRIANGLE)` — and zeroing every subobject's padding, not
+four ranges — makes mesh pipelines persist like graphics and compute ones.
+Upstream reached the same conclusion in `9c58a1c` ("A mesh pipeline's
+topology is given explicitly: the library refused every mesh pipeline
+without it").
+
+The remaining "more boots" effect is ordinary cache warm-up: the early list
+(`early=2598`, `started_early=1907`) and the translation cache are keyed to
+the build, so a *new executable* starts over. This loop runs one binary;
+reusing it is what makes the second and later runs fast.
+
+### Card-memory host copies: they were never made (2026-11-25)
+
+`host copies in the card's memory: 0` every run. The cause was not the
+VRAM budget: `card_ready()` compiles the compare with Wine's
+`d3dcompiler_47`, which cannot lower a store to a raw buffer, so it failed
+once (`E_FAIL`), was cached false, and every copy took the CPU path. With
+the existing DXC fallback (`dxcompiler.dll` beside the exe) the compare is
+made: **97 copies, 941 MB, 55k–60k pieces compared on the card per frame**.
+
+### What upstream has that this tree does not (2026-11-25)
+
+`Marvisak/VIctory#400` measures upstream `main` at ~800 ms/world frame on a
+9800X3D + RTX 5070 Ti: copies 245–304 ms, write-watch 143–165 ms over
+20–30 GB, 0.7 GB actually changed. This tree measures 2.1–6.3 s/frame with
+1.5–2.4 s in guards and watches on a 3700X. The gap is upstream's
+`6d021fe` world-frame series (page table per view heap, change checks that
+no longer wait on the memory module's lock, copy-back snapshots only of
+declared ranges), which post-dates this fork's base `ffe310e`. Merging
+`upstream/main` conflicts in **34 files**, most of them the fork's own
+shader emitter, so it was not taken here.
+
+Two environment findings from the same feed, now set by the supervisor:
+`VKD3D_SHADER_CACHE_PATH` (vkd3d-proton disables its own shader cache when
+the app supplies a pipeline library, so a boot's mesh compiles were never
+cached) and `VKD3D_CONFIG=ignore_shared_fence` (xcl-dev/xcl#1701: shared
+fences hang under vkd3d-proton and the title's watchdog kills it at
+`+0x2215c35`, the site this tree disables).
