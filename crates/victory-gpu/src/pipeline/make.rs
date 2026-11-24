@@ -317,7 +317,7 @@ fn workers() -> bool {
                 // default 2 MiB overflows on the world's mesh programs and
                 // takes the worker (and the pipeline the title waits for)
                 // with it.
-                .stack_size(128 << 20)
+                .stack_size(512 << 20)
                 .spawn(|| {
                     // Below the title's own threads (loading, recording).
                     // SAFETY: a plain call on our own thread.

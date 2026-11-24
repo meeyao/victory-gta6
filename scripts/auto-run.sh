@@ -49,6 +49,7 @@ while [ "$run" -lt "$max_runs" ]; do
     export VICTORY_WIDE_BACK=1
     export VICTORY_WIDE_REFRESH=1
     export VICTORY_JOIN_COPIES=1
+    export VICTORY_TEXTURE_BUDGET_MB=5120
     export VICTORY_CARD_BUFFERS_MIN_MB=1
     export VICTORY_CARD_BUFFERS_MB=1024
     export VICTORY_SKIP_PIPELINES="$list"
