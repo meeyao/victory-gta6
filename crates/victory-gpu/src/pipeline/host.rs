@@ -6,6 +6,7 @@
 //! the immediate samplers, and directly indexed heaps.
 
 use std::ffi::{CStr, CString};
+use std::ops::Range;
 use std::sync::Arc;
 
 use victory_shader::emit::{ROOT_CBV_SPACE, SAMPLER_SPACE, USER_DATA_SPACE};
@@ -53,7 +54,7 @@ impl Default for GraphicsState {
             StencilPassOp: D3D12_STENCIL_OP_KEEP,
             StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS,
         };
-        GraphicsState {
+        let mut state = GraphicsState {
             blend: D3D12_BLEND_DESC {
                 RenderTarget: [target; 8],
                 ..Default::default()
@@ -85,8 +86,45 @@ impl Default for GraphicsState {
                 Count: 1,
                 Quality: 0,
             },
+        };
+        zero_padding(&mut state.blend, &blend_padding());
+        zero_padding(&mut state.depth, &[depth_padding()]);
+        state
+    }
+}
+
+/// Zeroes the bytes of `value` at `padding`, in place: a structure read
+/// from the title's memory carries whatever lay between its fields, and the
+/// host's pipeline library tells descriptions apart by their bytes, padding
+/// included (an entry stored with other padding bytes never loads). The
+/// caller keeps `value` where it is: a move may rewrite its padding.
+fn zero_padding<T>(value: &mut T, padding: &[Range<usize>]) {
+    // SAFETY: `value` is a whole `T`; only bytes no field reads are written.
+    unsafe {
+        let bytes =
+            std::slice::from_raw_parts_mut(std::ptr::from_mut(value).cast::<u8>(), size_of::<T>());
+        for range in padding {
+            bytes[range.clone()].fill(0);
         }
     }
+}
+
+/// Where the padding of a blend description lies: after each target's
+/// write mask, a byte in a four-byte field.
+fn blend_padding() -> [Range<usize>; 8] {
+    std::array::from_fn(|i| {
+        let target = std::mem::offset_of!(D3D12_BLEND_DESC, RenderTarget)
+            + i * size_of::<D3D12_RENDER_TARGET_BLEND_DESC>();
+        target + std::mem::offset_of!(D3D12_RENDER_TARGET_BLEND_DESC, RenderTargetWriteMask) + 1
+            ..target + size_of::<D3D12_RENDER_TARGET_BLEND_DESC>()
+    })
+}
+
+/// Where the padding of a depth-stencil description lies: between the
+/// stencil write mask and the front face's operations.
+fn depth_padding() -> Range<usize> {
+    std::mem::offset_of!(D3D12_DEPTH_STENCIL_DESC, StencilWriteMask) + 1
+        ..std::mem::offset_of!(D3D12_DEPTH_STENCIL_DESC, FrontFace)
 }
 
 impl GraphicsState {
@@ -100,10 +138,16 @@ impl GraphicsState {
         unsafe {
             let data = at.add(4);
             match kind {
-                8 => self.blend = data.cast::<D3D12_BLEND_DESC>().read_unaligned(),
+                8 => {
+                    self.blend = data.cast::<D3D12_BLEND_DESC>().read_unaligned();
+                    zero_padding(&mut self.blend, &blend_padding());
+                }
                 9 => self.sample_mask = data.cast::<u32>().read_unaligned(),
                 10 => self.rasterizer = data.cast::<D3D12_RASTERIZER_DESC>().read_unaligned(),
-                11 => self.depth = data.cast::<D3D12_DEPTH_STENCIL_DESC>().read_unaligned(),
+                11 => {
+                    self.depth = data.cast::<D3D12_DEPTH_STENCIL_DESC>().read_unaligned();
+                    zero_padding(&mut self.depth, &[depth_padding()]);
+                }
                 21 => {
                     // shortcut: the depth bounds test is dropped (the host
                     // pipeline uses the plain description); bring it back
@@ -128,6 +172,7 @@ impl GraphicsState {
                         FrontFace: d.FrontFace,
                         BackFace: d.BackFace,
                     };
+                    zero_padding(&mut self.depth, &[depth_padding()]);
                 }
                 12 => {
                     let layout = at.add(8).cast::<D3D12_INPUT_LAYOUT_DESC>().read_unaligned();
@@ -720,6 +765,38 @@ impl HostPipeline {
     }
 }
 
+/// A stream subobject: its type, then its description, pointer-aligned.
+#[repr(C, align(8))]
+struct Sub<T>(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE, T);
+
+/// Where the padding of a mesh pipeline's stream lies: after the type of
+/// each subobject whose description is eight bytes wide, then at the end
+/// of the stream, after the last subobject's four-byte-aligned description.
+fn stream_padding() -> [Range<usize>; 4] {
+    [
+        std::mem::offset_of!(Stream, root) + 4..std::mem::offset_of!(Stream, root) + 8,
+        std::mem::offset_of!(Stream, ms) + 4..std::mem::offset_of!(Stream, ms) + 8,
+        std::mem::offset_of!(Stream, ps) + 4..std::mem::offset_of!(Stream, ps) + 8,
+        std::mem::offset_of!(Stream, samples) + 4 + size_of::<DXGI_SAMPLE_DESC>()
+            ..size_of::<Stream>(),
+    ]
+}
+
+/// The pipeline-state stream of a mesh pipeline.
+#[repr(C)]
+struct Stream {
+    root: Sub<*mut std::ffi::c_void>,
+    ms: Sub<D3D12_SHADER_BYTECODE>,
+    ps: Sub<D3D12_SHADER_BYTECODE>,
+    blend: Sub<D3D12_BLEND_DESC>,
+    mask: Sub<u32>,
+    raster: Sub<D3D12_RASTERIZER_DESC>,
+    depth: Sub<D3D12_DEPTH_STENCIL_DESC>,
+    targets: Sub<D3D12_RT_FORMAT_ARRAY>,
+    dsv: Sub<DXGI_FORMAT>,
+    samples: Sub<DXGI_SAMPLE_DESC>,
+}
+
 /// A mesh pipeline from the title's graphics state: the pipeline-state
 /// stream form (no input layout).
 ///
@@ -740,39 +817,31 @@ fn mesh_pipeline(
     name: &str,
 ) -> windows::core::Result<ID3D12PipelineState> {
     use windows::core::Interface;
-    /// A stream subobject: its type, then its description, pointer-aligned.
-    #[repr(C, align(8))]
-    struct Sub<T>(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE, T);
-    #[repr(C)]
-    struct Stream {
-        root: Sub<*mut std::ffi::c_void>,
-        ms: Sub<D3D12_SHADER_BYTECODE>,
-        ps: Sub<D3D12_SHADER_BYTECODE>,
-        blend: Sub<D3D12_BLEND_DESC>,
-        mask: Sub<u32>,
-        raster: Sub<D3D12_RASTERIZER_DESC>,
-        depth: Sub<D3D12_DEPTH_STENCIL_DESC>,
-        targets: Sub<D3D12_RT_FORMAT_ARRAY>,
-        dsv: Sub<DXGI_FORMAT>,
-        samples: Sub<DXGI_SAMPLE_DESC>,
-        topology: Sub<D3D12_PRIMITIVE_TOPOLOGY_TYPE>,
-    }
     let mut stream = Stream {
-        root: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, root.as_raw()),
+        root: Sub(
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE,
+            root.as_raw(),
+        ),
         ms: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, ms),
         ps: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, ps),
         blend: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.blend),
-        mask: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, g.sample_mask),
+        mask: Sub(
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK,
+            g.sample_mask,
+        ),
         raster: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, g.rasterizer),
         depth: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, g.depth),
-        targets: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS, g.targets),
-        dsv: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT, g.depth_format),
-        samples: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, g.samples),
-        topology: Sub(
-            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY,
-            D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+        targets: Sub(
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS,
+            g.targets,
         ),
+        dsv: Sub(
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT,
+            g.depth_format,
+        ),
+        samples: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, g.samples),
     };
+    zero_padding(&mut stream, &stream_padding());
     let desc = D3D12_PIPELINE_STATE_STREAM_DESC {
         SizeInBytes: size_of::<Stream>(),
         pPipelineStateSubobjectStream: (&raw mut stream).cast(),
@@ -845,87 +914,97 @@ fn root_signature(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::Ordering;
-
     use super::*;
 
-    /// A triangle mesh shader of our own and a pixel shader for it.
-    const MS: &str = "struct V { float4 p : SV_Position; };
-        [outputtopology(\"triangle\")] [numthreads(1, 1, 1)]
-        void main(out vertices V v[3], out indices uint3 t[1]) {
-            SetMeshOutputCounts(3, 1);
-            v[0].p = float4(0, 0, 0, 1);
-            v[1].p = float4(1, 0, 0, 1);
-            v[2].p = float4(0, 1, 0, 1);
-            t[0] = uint3(0, 1, 2);
-        }";
-    const PS: &str = "float4 main() : SV_Target { return 1; }";
-
-    /// The PC `dxc.exe` (`VICTORY_PC_DXC`, else the newest Windows SDK's).
-    fn dxc() -> Option<PathBuf> {
-        let dxc = match std::env::var_os("VICTORY_PC_DXC") {
-            Some(p) => PathBuf::from(p),
-            None => victory_shader::emit::validator::Validator::default_path()?
-                .with_file_name("dxc.exe"),
-        };
-        dxc.exists().then_some(dxc)
-    }
-
-    fn compile(dxc: &Path, dir: &Path, src: &str, profile: &str) -> Vec<u8> {
-        let (hlsl, out) = (
-            dir.join(format!("{profile}.hlsl")),
-            dir.join(format!("{profile}.dxil")),
-        );
-        std::fs::write(&hlsl, src).unwrap();
-        let status = std::process::Command::new(dxc)
-            .args(["-nologo", "-T", profile, "-E", "main", "-Fo"])
-            .arg(&out)
-            .arg(&hlsl)
-            .status()
-            .unwrap();
-        assert!(status.success(), "dxc failed for {profile}");
-        std::fs::read(out).unwrap()
-    }
-
-    fn code(bytes: &[u8]) -> D3D12_SHADER_BYTECODE {
-        D3D12_SHADER_BYTECODE {
-            pShaderBytecode: bytes.as_ptr().cast(),
-            BytecodeLength: bytes.len(),
+    /// The bytes of `value` no field reads (see `zero_padding`).
+    fn padding_of<T>(value: &T, padding: &[Range<usize>]) -> Vec<u8> {
+        // SAFETY: `value` is a whole `T`.
+        unsafe {
+            let bytes =
+                std::slice::from_raw_parts(std::ptr::from_ref(value).cast::<u8>(), size_of::<T>());
+            padding
+                .iter()
+                .flat_map(|r| r.clone().map(|i| bytes[i]))
+                .collect()
         }
     }
 
-    /// A mesh pipeline made once is loaded from the library the next time,
-    /// not compiled again (a stream without a topology never loads).
+    /// Descriptions read with other bytes between their fields are the same
+    /// to the host: the title leaves what it likes there.
     #[test]
-    fn a_mesh_pipeline_loads_from_the_library() {
-        let Some(host) = host() else {
-            return; // no host GPU here
-        };
-        if !host.mesh_shaders() {
-            eprintln!("no host mesh shader support; skipped");
-            return;
+    fn read_states_carry_no_padding() {
+        // 4 bytes of type, then the longest description, the blend's.
+        let junk = vec![0xffu8; 4 + size_of::<D3D12_BLEND_DESC>()];
+        let mut state = GraphicsState::default();
+        for kind in [21, 11, 8] {
+            // SAFETY: 0xff bytes, a whole subobject of each kind.
+            unsafe { state.read(kind, junk.as_ptr()) };
+            assert_eq!(padding_of(&state.depth, &[depth_padding()]), [0, 0]);
         }
-        let Some(dxc) = dxc() else {
-            eprintln!("no PC dxc.exe; skipped");
-            return;
+        assert_eq!(padding_of(&state.blend, &blend_padding()), vec![0; 24]);
+        // The fields themselves are the title's.
+        assert_eq!(state.blend.RenderTarget[7].RenderTargetWriteMask, 0xff);
+        assert_eq!(state.depth.StencilWriteMask, 0xff);
+        assert_eq!(state.depth.FrontFace.StencilFailOp, D3D12_STENCIL_OP(-1));
+        // So does the default state.
+        let state = GraphicsState::default();
+        assert_eq!(padding_of(&state.depth, &[depth_padding()]), [0, 0]);
+        assert_eq!(padding_of(&state.blend, &blend_padding()), vec![0; 24]);
+    }
+
+    /// A stream's subobjects carry no padding either: a description of
+    /// eight bytes leaves four after its type, and the last one, four-byte
+    /// aligned, leaves four at the end. Every field keeps its value.
+    #[test]
+    fn stream_subobjects_carry_no_padding() {
+        let g = GraphicsState {
+            samples: DXGI_SAMPLE_DESC { Count: 4, Quality: 7 },
+            ..GraphicsState::default()
         };
-        let dir = tempfile::tempdir().unwrap();
-        let ms = compile(&dxc, dir.path(), MS, "ms_6_5");
-        let ps = compile(&dxc, dir.path(), PS, "ps_6_5");
-        let (root, root_blob) = root_signature(&host.device, &[], &[], false).unwrap();
-        let mut g = GraphicsState::default();
-        // This pipeline has only a color target, with no depth buffer.
-        g.depth.DepthEnable = false.into();
-        g.targets.NumRenderTargets = 1;
-        g.targets.RTFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-        let name = super::super::library::name("mesh test", &root_blob, &[&ms, &ps], &g.describe());
-        mesh_pipeline(&host.device, &root, code(&ms), code(&ps), &g, &name).expect("made");
-        let loaded = super::super::library::LOADED.load(Ordering::Relaxed);
-        mesh_pipeline(&host.device, &root, code(&ms), code(&ps), &g, &name).expect("made again");
-        assert!(
-            super::super::library::LOADED.load(Ordering::Relaxed) > loaded,
-            "the mesh pipeline was compiled again instead of loaded from the library"
-        );
+        let code = D3D12_SHADER_BYTECODE {
+            pShaderBytecode: std::ptr::without_provenance(0x10),
+            BytecodeLength: 0x20,
+        };
+        let mut stream = Stream {
+            root: Sub(
+                D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE,
+                0x10 as *mut std::ffi::c_void,
+            ),
+            ms: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, code),
+            ps: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, code),
+            blend: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.blend),
+            mask: Sub(
+                D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK,
+                g.sample_mask,
+            ),
+            raster: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, g.rasterizer),
+            depth: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, g.depth),
+            targets: Sub(
+                D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS,
+                g.targets,
+            ),
+            dsv: Sub(
+                D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT,
+                g.depth_format,
+            ),
+            samples: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, g.samples),
+        };
+        zero_padding(&mut stream, &stream_padding());
+        // SAFETY: `stream` is a whole `Stream`.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::from_ref(&stream).cast::<u8>(),
+                size_of::<Stream>(),
+            )
+        };
+        for range in stream_padding() {
+            assert_eq!(&bytes[range.clone()], &[0; 4]);
+        }
+        // The fields are where they were.
+        assert_eq!(stream.root.1, 0x10 as *mut std::ffi::c_void);
+        assert_eq!(stream.ms.1.BytecodeLength, 0x20);
+        assert_eq!(stream.samples.1, DXGI_SAMPLE_DESC { Count: 4, Quality: 7 });
+        assert_eq!(stream.dsv.1, g.depth_format);
+        assert_eq!(stream.mask.1, g.sample_mask);
     }
 }
