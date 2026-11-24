@@ -774,12 +774,18 @@ struct Sub<T>(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE, T);
 /// Where the padding of a mesh pipeline's stream lies: after the type of
 /// each subobject whose description is eight bytes wide, then at the end
 /// of the stream, after the last subobject's four-byte-aligned description.
-fn stream_padding() -> [Range<usize>; 4] {
+fn stream_padding() -> [Range<usize>; 7] {
     [
         std::mem::offset_of!(Stream, root) + 4..std::mem::offset_of!(Stream, root) + 8,
         std::mem::offset_of!(Stream, ms) + 4..std::mem::offset_of!(Stream, ms) + 8,
         std::mem::offset_of!(Stream, ps) + 4..std::mem::offset_of!(Stream, ps) + 8,
+        std::mem::offset_of!(Stream, mask) + 4 + size_of::<u32>()
+            ..std::mem::offset_of!(Stream, raster),
+        std::mem::offset_of!(Stream, dsv) + 4 + size_of::<DXGI_FORMAT>()
+            ..std::mem::offset_of!(Stream, samples),
         std::mem::offset_of!(Stream, samples) + 4 + size_of::<DXGI_SAMPLE_DESC>()
+            ..std::mem::offset_of!(Stream, topology),
+        std::mem::offset_of!(Stream, topology) + 4 + size_of::<D3D12_PRIMITIVE_TOPOLOGY_TYPE>()
             ..size_of::<Stream>(),
     ]
 }
@@ -797,6 +803,7 @@ struct Stream {
     targets: Sub<D3D12_RT_FORMAT_ARRAY>,
     dsv: Sub<DXGI_FORMAT>,
     samples: Sub<DXGI_SAMPLE_DESC>,
+    topology: Sub<D3D12_PRIMITIVE_TOPOLOGY_TYPE>,
 }
 
 /// A mesh pipeline from the title's graphics state: the pipeline-state
@@ -842,6 +849,10 @@ fn mesh_pipeline(
             g.depth_format,
         ),
         samples: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, g.samples),
+        topology: Sub(
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY,
+            D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+        ),
     };
     zero_padding(&mut stream, &stream_padding());
     let desc = D3D12_PIPELINE_STATE_STREAM_DESC {
@@ -991,6 +1002,10 @@ mod tests {
                 g.depth_format,
             ),
             samples: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, g.samples),
+            topology: Sub(
+                D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY,
+                D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            ),
         };
         zero_padding(&mut stream, &stream_padding());
         // SAFETY: `stream` is a whole `Stream`.
@@ -1001,7 +1016,7 @@ mod tests {
             )
         };
         for range in stream_padding() {
-            assert_eq!(&bytes[range.clone()], &[0; 4]);
+            assert!(bytes[range.clone()].iter().all(|&b| b == 0), "padding {range:?}");
         }
         // The fields are where they were.
         assert_eq!(stream.root.1, 0x10 as *mut std::ffi::c_void);
