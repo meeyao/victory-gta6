@@ -1,0 +1,104 @@
+diff --git a/crates/victory-gpu/Cargo.toml b/crates/victory-gpu/Cargo.toml
+index a24dd1a..e186e8e 100644
+--- a/crates/victory-gpu/Cargo.toml
++++ b/crates/victory-gpu/Cargo.toml
+@@ -30,6 +30,7 @@ workspace = true
+ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Performance", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+ windows = { workspace = true, features = [
+     "Win32_Graphics_Direct3D",
++    "Win32_Graphics_Direct3D_Dxc",
+     "Win32_Graphics_Direct3D_Fxc",
+     "Win32_Graphics_Direct3D12",
+     "Win32_Graphics_Dxgi",
+diff --git a/crates/victory-gpu/src/indirect.rs b/crates/victory-gpu/src/indirect.rs
+index 8edcece..ab978ba 100644
+--- a/crates/victory-gpu/src/indirect.rs
++++ b/crates/victory-gpu/src/indirect.rs
+@@ -20,6 +20,7 @@
+ //! dispatches, the budget) cut legitimate work beyond them; raise them if
+ //! the title needs more.
+ 
++use windows::Win32::Graphics::Direct3D::Dxc::*;
+ use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+ use windows::Win32::Graphics::Direct3D::ID3DBlob;
+ use windows::Win32::Graphics::Direct3D12::*;
+@@ -133,6 +134,43 @@ void main(uint3 id : SV_DispatchThreadID) {
+ }
+ "#;
+ 
++/// Compiles `source` as `cs_6_0` with DXC, loaded from `dxcompiler.dll`
++/// (the executable's directory, then the system's).
++fn dxc_compile(source: &str) -> windows::core::Result<Vec<u8>> {
++    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
++    use windows::core::{Interface, w};
++    type Create = unsafe extern "system" fn(
++        *const windows::core::GUID,
++        *const windows::core::GUID,
++        *mut *mut std::ffi::c_void,
++    ) -> windows::core::HRESULT;
++    // SAFETY: loading the compiler and calling its documented entry point
++    // with out pointers of ours; the buffer and arguments outlive the calls.
++    unsafe {
++        let library = LoadLibraryW(w!("dxcompiler.dll"))?;
++        let create: Create = std::mem::transmute(
++            GetProcAddress(library, s!("DxcCreateInstance"))
++                .ok_or_else(windows::core::Error::from_thread)?,
++        );
++        let mut raw = std::ptr::null_mut();
++        create(&CLSID_DxcCompiler, &IDxcCompiler3::IID, &mut raw).ok()?;
++        let compiler = IDxcCompiler3::from_raw(raw);
++        let buffer = DxcBuffer {
++            Ptr: source.as_ptr().cast(),
++            Size: source.len(),
++            Encoding: DXC_CP_UTF8.0,
++        };
++        let arguments = [w!("-T"), w!("cs_6_0"), w!("-E"), w!("main"), w!("-O3")];
++        let result: IDxcResult = compiler.Compile(&buffer, Some(&arguments), None)?;
++        result.GetStatus()?.ok()?;
++        let blob = result.GetResult()?;
++        Ok(
++            std::slice::from_raw_parts(blob.GetBufferPointer().cast::<u8>(), blob.GetBufferSize())
++                .to_vec(),
++        )
++    }
++}
++
+ struct Clamp {
+     root: ID3D12RootSignature,
+     pso: ID3D12PipelineState,
+@@ -180,6 +218,10 @@ fn make_for(device: &ID3D12Device) -> windows::core::Result<Clamp> {
+             Some(&mut errors),
+         )
+     };
++    // Wine's d3dcompiler_47 cannot compile this (vkd3d-shader has no store
++    // to a raw buffer); DXC (dxcompiler.dll beside the executable) can, and
++    // its cs_6_0 container carries the root signature the same way.
++    let mut dxc = None;
+     if let Err(e) = compiled {
+         if let Some(errors) = errors {
+             // SAFETY: the blob's own bytes.
+@@ -189,15 +231,19 @@ fn make_for(device: &ID3D12Device) -> windows::core::Result<Clamp> {
+                     errors.GetBufferSize(),
+                 )
+             };
+-            tracing::warn!("argument clamp: {}", String::from_utf8_lossy(text));
++            tracing::info!(error = %e, "argument clamp: the system compiler refused it ({}); trying DXC", String::from_utf8_lossy(text).trim());
+         }
+-        return Err(e);
++        dxc = Some(dxc_compile(SOURCE)?);
+     }
+-    let code = code.ok_or_else(windows::core::Error::empty)?;
+     // SAFETY: the blob's own bytes; the root signature is inside the shader.
+     unsafe {
+-        let bytes =
+-            std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize());
++        let bytes: &[u8] = match (&dxc, &code) {
++            (Some(bytes), _) => bytes,
++            (None, Some(code)) => {
++                std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize())
++            }
++            (None, None) => return Err(windows::core::Error::empty()),
++        };
+         let root: ID3D12RootSignature = device.CreateRootSignature(0, bytes)?;
+         let pso = device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
+             pRootSignature: std::mem::transmute_copy(&root),
