@@ -55,6 +55,10 @@ while [ "$run" -lt "$max_runs" ]; do
     export VICTORY_WIDE_BACK=1
     export VICTORY_WIDE_REFRESH=1
     export VICTORY_JOIN_COPIES=1
+    # First ray-tracing test: the builder may run, its stores stay out of
+    # title memory (docs/fork-ray-tracing.md).
+    export VICTORY_BVH_BUILDER=1
+    export VICTORY_BVH_QUARANTINE=1
     export VICTORY_CARD_BUFFERS_MIN_MB=1
     export VICTORY_CARD_BUFFERS_MB=1024
     export VICTORY_SKIP_PIPELINES="$list"
