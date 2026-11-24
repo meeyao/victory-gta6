@@ -9,6 +9,12 @@ speed fixes.
 **It contains no game files.** You need your own dump.
 Not affiliated with Rockstar Games or Take-Two.
 
+**This is the canonical repository for the work**: branches, the guide,
+`findings.md`, the supervisor and the watcher all live here
+(`github.com/meeyao/VIctory`, branch `linux-findings`). The fork
+`meeyao/victory-gta6` is kept only as a mirror for the pull request to the
+upstream fork.
+
 ---
 
 ## Where it stands (2026-11-25)
