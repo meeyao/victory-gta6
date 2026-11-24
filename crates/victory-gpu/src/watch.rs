@@ -594,12 +594,35 @@ fn open(g: &mut Guards, start: usize, end: usize) -> bool {
         .range(start / BLOCK..end.div_ceil(BLOCK))
         .copied()
         .collect();
+    let set = |from: usize, to: usize| {
+        let mut old = 0;
+        // SAFETY: blocks we made read-only.
+        unsafe {
+            VirtualProtect(
+                (from * BLOCK) as *const _,
+                (to - from) * BLOCK,
+                PAGE_READWRITE,
+                &mut old,
+            )
+        };
+    };
+    // One call per run of neighbouring blocks: a put-back of 60 MB covers
+    // ~960 blocks, and a call each cost 1.3-1.8 s a world frame.
+    let mut run: Option<(usize, usize)> = None;
     for &block in &blocks {
         g.protected.remove(&block);
         g.clean.remove(&block);
-        let mut old = 0;
-        // SAFETY: a block we made read-only.
-        unsafe { VirtualProtect((block * BLOCK) as *const _, BLOCK, PAGE_READWRITE, &mut old) };
+        match run {
+            Some((from, to)) if block == to => run = Some((from, to + 1)),
+            Some((from, to)) => {
+                set(from, to);
+                run = Some((block, block + 1));
+            }
+            None => run = Some((block, block + 1)),
+        }
+    }
+    if let Some((from, to)) = run {
+        set(from, to);
     }
     !blocks.is_empty()
 }
