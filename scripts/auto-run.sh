@@ -47,6 +47,7 @@ while [ "$run" -lt "$max_runs" ]; do
     export VICTORY_LATE_WAIT=3
     export VICTORY_RELAY=2
     export VICTORY_WIDE_BACK=1
+    export VICTORY_WIDE_REFRESH=1
     export VICTORY_JOIN_COPIES=1
     export VICTORY_CARD_BUFFERS_MIN_MB=1
     export VICTORY_CARD_BUFFERS_MB=1024
