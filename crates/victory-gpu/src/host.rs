@@ -5412,28 +5412,28 @@ pub(crate) fn read_into(src: *const u8, dst: &mut [u8]) -> bool {
     read(src, dst.as_mut_ptr(), dst.len())
 }
 
-/// Whether `[at, at + len)` is committed and readable (or writable), so a
-/// plain `memcpy` cannot fault.
+/// The end of the run of committed, readable (or writable) pages that
+/// starts at `at`, cut at `end`. `None` if the page at `at` is not one.
 ///
 /// The kernel calls cost 40 MB/s reading and 10 MB/s writing here: they walk
 /// the range page by page. One `VirtualQuery` per region is enough to know
-/// the bytes are there, and the copy is then memory speed.
-fn mapped_whole(at: usize, len: usize, write: bool) -> bool {
+/// the bytes are there, and the copy is then memory speed. Title memory is
+/// view memory with holes, so this answers per run, not per range.
+fn mapped_run(at: usize, end: usize, write: bool) -> Option<usize> {
     use windows_sys::Win32::System::Memory::{
         MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
     };
-    let end = at.saturating_add(len);
     let mut p = at;
     while p < end {
         // SAFETY: the query inspects an address and fills a local structure.
         let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         let size = unsafe { VirtualQuery(p as _, &mut info, size_of_val(&info)) };
         if size != size_of_val(&info) {
-            return false;
+            return (p > at).then_some(p);
         }
         let next = (info.BaseAddress as usize).saturating_add(info.RegionSize);
         if next <= p {
-            return false;
+            return (p > at).then_some(p);
         }
         let protect = info.Protect & 0xff;
         let writable = matches!(protect, 0x04 | 0x08 | 0x40 | 0x80);
@@ -5441,11 +5441,15 @@ fn mapped_whole(at: usize, len: usize, write: bool) -> bool {
             || info.Protect & (PAGE_NOACCESS | PAGE_GUARD) != 0
             || (write && !writable)
         {
-            return false;
+            return (p > at).then_some(p);
         }
         p = next;
     }
-    true
+    Some(end)
+}
+
+fn mapped_whole(at: usize, len: usize, write: bool) -> bool {
+    mapped_run(at, at.saturating_add(len), write) == Some(at.saturating_add(len))
 }
 
 /// Copies `len` bytes from `src` to `dst` unless a source page is not
@@ -5539,22 +5543,29 @@ pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
     if len == 0 {
         return;
     }
-    if mapped_whole(dst as usize, len, true) {
-        // SAFETY: the destination's pages are committed and writable
-        // (`mapped_whole`), the source is our host copy.
-        unsafe { std::ptr::copy_nonoverlapping(src, dst, len) };
-        return;
-    }
-    if write(dst as usize, len) {
-        return;
-    }
-    for_pieces(dst as usize, len, 64 << 10, |at, n| {
-        if !write(at, n) {
-            for_pieces(at, n, 4 << 10, |at, n| {
+    // Title memory is view memory with holes: copy the committed runs at
+    // memory speed and give the holes to the kernel, one piece at a time.
+    let mut at = dst as usize;
+    let end = at + len;
+    while at < end {
+        if let Some(to) = mapped_run(at, end, true) {
+            // SAFETY: the destination's pages are committed and writable
+            // (`mapped_run`), the source is our host copy.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.wrapping_add(at - dst as usize), at as *mut u8, to - at)
+            };
+            at = to;
+            continue;
+        }
+        let step = 64 << 10;
+        let to = ((at / step + 1) * step).min(end);
+        if !write(at, to - at) {
+            for_pieces(at, to - at, 4 << 10, |at, n| {
                 write(at, n);
             });
         }
-    });
+        at = to;
+    }
 }
 
 /// Calls `f` with the pieces of `[start, start + len)` cut at multiples of
