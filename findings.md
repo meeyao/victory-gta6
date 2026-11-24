@@ -45,6 +45,60 @@ dropped   68/frame  indirect kind 0:  not bounded
 With them: `0` "no argument clamp" warnings, and at frame 4096
 `draws=22144 drawn=22142 dispatches=4219 dispatched=4210`.
 
+## First-time setup on Linux
+
+1. **Steam, Proton and the runtime.** Install Steam, then from Library → Tools install
+   **Proton Experimental** and **Steam Linux Runtime 4.0**. The wrapper below calls
+   `SteamLinuxRuntime_4/_v2-entry-point` directly. Check both exist:
+
+   ```sh
+   ls "$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton"
+   ls "$HOME/.local/share/Steam/steamapps/common/SteamLinuxRuntime_4/_v2-entry-point"
+   ```
+
+   If Steam is installed elsewhere, change `steam=` in the wrapper.
+
+2. **Cross-compilation toolchain.** Linux builds the Windows executable:
+
+   ```sh
+   rustup toolchain install stable
+   rustup target add x86_64-pc-windows-msvc
+   cargo install cargo-xwin
+   # a compiler and linker for the cross build
+   sudo pacman -S clang lld        # Arch
+   # sudo apt install clang lld    # Debian/Ubuntu
+   ```
+
+   `cargo-xwin` downloads the Windows SDK and CRT on the first build (set `XWIN_CACHE_DIR`
+   to keep it somewhere specific). Verified with Rust 1.98.1; a newer stable should work.
+
+3. **The game files.** Extract your own dump to a directory. Nothing from the game is
+   included in this archive; the path can be read-only.
+
+4. **The Proton prefix and `victory.toml`.** The first launch creates the prefix under
+   `$work/compatdata`. To write the config beforehand, create it once:
+
+   ```sh
+   mkdir -p "$HOME/.local/share/victory-proton-test"
+   ./run.sh cmd /c exit      # or: STEAM_COMPAT_DATA_PATH=... "$runtime" --verb=run -- "$proton" cmd /c exit
+   ```
+
+   then write `$HOME/.local/share/victory-proton-test/compatdata/pfx/drive_c/victory.toml`
+   with the `[paths]` block below, using `Z:\...` paths for Linux directories.
+
+5. **DXC.** Download the **Windows x64** release from
+   <https://github.com/microsoft/DirectXShaderCompiler/releases> and put `dxcompiler.dll`
+   and `dxil.dll` beside `victory.exe`. The Linux `dxc` binary is not enough: the runtime
+   loads the DLLs inside the game process.
+
+6. **The wrapper.** Copy `run.sh.example` to `run.sh`, edit the four paths at the top,
+   `chmod +x run.sh`.
+
+7. **First launch expectations.** The first run is cold: it builds 500–1,300 pipelines and
+   the world appears after several minutes. Frame rate starts around 0.05–0.1 fps; later
+   runs reuse the pipeline library and are faster. Create the capture directory before
+   asking for captures, or every save logs `Path not found`.
+
 ## Build
 
 Requirements: Rust with the `x86_64-pc-windows-msvc` target, `cargo-xwin` (plus its Windows SDK
@@ -79,35 +133,17 @@ Proton Experimental, a dedicated prefix, and `victory.toml` on `C:`:
 
 ```toml
 [paths]
-game_dir  = 'Z:\mnt\xp\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
-cache_dir = 'Z:\mnt\ecliptica\victory-data\cache'
-data_dir  = 'Z:\mnt\ecliptica\victory-data\data'
+game_dir  = 'Z:\path\to\GTA6.Xbox.v1.0.2.1'
+cache_dir = 'Z:\path\to\victory-data\cache'
+data_dir  = 'Z:\path\to\victory-data\data'
 test_titles = []
 ```
 
-A minimal wrapper (this is what was used):
-
-```sh
-#!/usr/bin/env bash
-set -euo pipefail
-repo=/path/to/victory-gta6
-game=/mnt/xp/GTA6.Xbox.v1.0.2.1-CYBERLEEK
-work=$HOME/.local/share/victory-proton-test
-steam=$HOME/.local/share/Steam
-runtime="$steam/steamapps/common/SteamLinuxRuntime_4/_v2-entry-point"
-proton="$steam/steamapps/common/Proton - Experimental/proton"
-
-unset WINEPREFIX VICTORY_GAME_DIR VICTORY_CACHE_DIR VICTORY_DATA_DIR VICTORY_TEST_TITLES
-export STEAM_COMPAT_CLIENT_INSTALL_PATH="$steam"
-export STEAM_COMPAT_DATA_PATH="$work/compatdata"
-export STEAM_COMPAT_INSTALL_PATH="$repo"
-export STEAM_COMPAT_MOUNTS="$repo:$game:$work"
-export WINEDLLOVERRIDES='d3d12,d3d12core,dxgi=n'
-export VICTORY_CONFIG='C:\victory.toml'      # work/compatdata/pfx/drive_c/victory.toml
-
-cd "$work"
-exec "$runtime" --verb=run -- "$proton" runinprefix "$@"
-```
+Copy `run.sh.example` to `run.sh`, set `repo`, `game`, `work` and `steam` at the top, and
+`chmod +x run.sh`. It exports the four Proton variables that matter — `STEAM_COMPAT_DATA_PATH`,
+`STEAM_COMPAT_INSTALL_PATH`, `STEAM_COMPAT_MOUNTS` (so the game and the build are visible in
+the prefix) and `WINEDLLOVERRIDES='d3d12,d3d12core,dxgi=n'` — and runs the Windows executable
+inside the runtime.
 
 Launch:
 
@@ -120,7 +156,7 @@ export VKD3D_DISABLE_EXTENSIONS=VK_NV_raw_access_chains
 export VICTORY_KEYS=$(seq 20 5 300 | awk '{printf "%s:Enter,",$1}' | sed 's/,$//')
 
 ./run.sh ./target/x86_64-pc-windows-msvc/diag/victory.exe \
-    run 'Z:\mnt\xp\GTA6.Xbox.v1.0.2.1-CYBERLEEK\game_scarlett_master.exe' --execute
+    run 'Z:\path\to\GTA6.Xbox.v1.0.2.1\game_scarlett_master.exe' --execute
 ```
 
 `VICTORY_KEYS` may need adapting: on a fresh profile Enter alone can loop on the Legal Notices
