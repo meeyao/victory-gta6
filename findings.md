@@ -213,8 +213,17 @@ texture refreshes: 4,242 ms, of them 3,810 ms waiting for title memory to hold s
 ```
 
 `VICTORY_TEXTURE_NO_WAIT=1` targets the 3.8 s remap wait exactly (read through the kernel, a
-texture may arrive one frame late). The copy path and the write-watch asks are the next
-targets; the fork's `VICTORY_JOIN_COPIES` and `VICTORY_INPLACE` are the candidates.
+texture may arrive one frame late). Measured with it plus the relay switches on the same host:
+
+```
+texture refreshes   4,242 ms → 267–380 ms   (the remap wait is 0.0 ms)
+frame time          10–18 s  → 1.4–8.8 s    (best 0.7 fps, typical 0.15–0.4 fps)
+what remains        title copies 1.2–2.5 s, copy-back up to 5.7 s
+```
+
+The copy path is the next target; `VICTORY_JOIN_COPIES=1` joins adjacent title copies,
+`VICTORY_CARD_BUFFERS_MIN_MB`/`VICTORY_CARD_BUFFERS_MB` move large copies to the card, and
+`VICTORY_INPLACE` avoids copies by using title memory in place (first stage only).
 
 Do **not** set `VICTORY_D3D12_DRED` for normal play: measured at ~2.5× cost in the world.
 
@@ -224,7 +233,12 @@ Do **not** set `VICTORY_D3D12_DRED` for normal play: measured at ~2.5× cost in 
   "Continue" and it dies in ~40 s at `+0x164a298` (read `0x2c`) — a different failure that looks
   like a crash. Move `data/7952987A/saves` aside, or use a fresh `data_dir`.
 - **Capture frames are presented-frame numbers**, which advance even while loading. The world
-  starts around frame 3,000–4,300 depending on how fast pipelines build.
+  starts around frame 4,500–5,000: captures at 3,000–4,200 are the loading key art. Ask for
+  5,000 and later.
+- **The title waits about 2 s for the GPU.** Frames longer than that eventually trip its
+  "GPU Loc Sig" watchdog (we saw it at frame 7,232, right after a burst of new world
+  pipelines was built). The pipeline library survives, so the next run starts warm and gets
+  further — but keeping frames short matters more than any single pass.
 - The first run is cold: 500–1,300 pipelines are built (the fork loads ~960 from its library,
   builds the rest). Later runs reuse them.
 - The title's crash reporter tries to upload a minidump to `submit.backtrace.io`; the runtime
