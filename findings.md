@@ -289,6 +289,22 @@ The same pattern is how the ecosystem news is used: a five-minute watcher report
 open/closed issues across the fork, upstream, XCL, TuxBox and the other compatibility layers, so a
 fix published there is visible here without a manual search.
 
+### Measured on the merged stack (2026-11-25)
+
+With the fork's 7 newer commits (`90228a7` lane masks, `d279e69` configurable pipeline
+waits, …), the two pipeline-library fixes from `Pablo-Barros/VIctory#1683` (zeroed padding;
+stop keeping the mesh pipelines D3D12 refuses to load), `NtReadVirtualMemory` for title reads,
+the split-range watch fix and 128 MiB worker stacks:
+
+- world frames: **0.2–0.4 fps**, 2.7–5.8 s/frame; copies 0.8–1.4 s, copy-back up to 1.4 s;
+- `copied whole (memory not watched): 0.0 ms/frame` — the split-range fix works;
+- the library now says once `refuses a mesh pipeline it just stored: mesh pipelines are
+  compiled every run, none kept` and stops polluting itself, but those pipelines are still
+  compiled each run (the host refuses to load them);
+- **four compute programs still overflow a 128 MiB worker stack** — `55679a0547649d0b`,
+  `afeea48bbb9913ad`, `e8c962358d862e3f`, `44a9625f01769f33` — which is unbounded recursion in
+  the translator, not depth; they are seeded in `auto-runs/skips.txt`.
+
 ### Two test-method traps
 
 - `VICTORY_COPY_MODE=plain` is a **timing mode only**. It `memcpy`s title memory without checking
