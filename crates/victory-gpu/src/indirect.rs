@@ -136,7 +136,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 
 /// Compiles `source` as `cs_6_0` with DXC, loaded from `dxcompiler.dll`
 /// (the executable's directory, then the system's).
-fn dxc_compile(source: &str) -> windows::core::Result<Vec<u8>> {
+pub(crate) fn dxc_compile(source: &str) -> windows::core::Result<Vec<u8>> {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::core::{Interface, w};
     type Create = unsafe extern "system" fn(

@@ -2908,7 +2908,7 @@ impl Host {
         let mut code: Option<ID3DBlob> = None;
         // SAFETY: the source and names live through the call; the out
         // pointer is ours.
-        unsafe {
+        let compiled = unsafe {
             D3DCompile(
                 CARD_COMPARE.as_ptr().cast(),
                 CARD_COMPARE.len(),
@@ -2921,9 +2921,27 @@ impl Host {
                 0,
                 &mut code,
                 None,
-            )?;
-        }
-        let code = code.ok_or_else(windows::core::Error::empty)?;
+            )
+        };
+        // Wine's d3dcompiler_47 cannot lower a store to a raw buffer (the
+        // same limit the argument clamp meets), so the compare never was
+        // made under Proton and every copy took the CPU path. DXC is beside
+        // the executable.
+        let compiled = match compiled {
+            Ok(()) => {
+                let code = code.ok_or_else(windows::core::Error::empty)?;
+                // SAFETY: the blob's own bytes.
+                unsafe {
+                    std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize())
+                        .to_vec()
+                }
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "card compare: the system compiler refused it; trying DXC");
+                crate::indirect::dxc_compile(CARD_COMPARE)?
+            }
+        };
+        let code = compiled;
         let list = || self.make_prelude().ok_or_else(windows::core::Error::empty);
         // A megabyte of results: 262,144 pieces, 16 GB of declared ranges
         // in one submission.
@@ -2933,8 +2951,11 @@ impl Host {
         // SAFETY: the blob's own bytes; the root signature is inside the
         // shader.
         unsafe {
-            let bytes = std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize());
-            let root: ID3D12RootSignature = self.device.CreateRootSignature(0, bytes)?;
+            let bytes = &code[..];
+            let root: ID3D12RootSignature = self.device.CreateRootSignature(0, bytes).map_err(|e| {
+                tracing::warn!(error = %e, "card compare: the root signature in the blob was refused");
+                e
+            })?;
             let pso: ID3D12PipelineState = self.device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
                 pRootSignature: std::mem::transmute_copy(&root),
                 CS: D3D12_SHADER_BYTECODE {
@@ -2942,6 +2963,9 @@ impl Host {
                     BytecodeLength: bytes.len(),
                 },
                 ..Default::default()
+            }).map_err(|e| {
+                tracing::warn!(error = %e, "card compare: the compute pipeline was refused");
+                e
             })?;
             Ok(CardWork {
                 sync: vec![list()?],
