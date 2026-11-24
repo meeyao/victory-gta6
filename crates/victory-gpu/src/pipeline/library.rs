@@ -586,7 +586,7 @@ pub(crate) fn pipeline(
         library.added.fetch_add(1, Ordering::Relaxed);
     }
     if kept.load(Ordering::Relaxed) == UNKNOWN {
-        let again = load(&l.library, PCWSTR(wide.as_ptr()));
+        let again = load(&library.library, PCWSTR(wide.as_ptr()));
         kept.store(if again.is_ok() { YES } else { NO }, Ordering::Relaxed);
         if again.is_err() {
             tracing::warn!(
