@@ -5577,7 +5577,12 @@ pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
     let mut at = dst as usize;
     let end = at + len;
     while at < end {
-        if let Some(to) = mapped_run(at, end, true) {
+        // `mapped_run` walks the page tables to the region's end: ~0.6 ms in
+        // the title's pools, while a copy-back piece is 20-100 KB. On native
+        // Windows that made the copy-back 34 ms -> 3.6 s a frame (fork #363),
+        // so only a large piece is worth the question.
+        let fast = end - at >= (256 << 10);
+        if fast && let Some(to) = mapped_run(at, end, true) {
             // SAFETY: the destination's pages are committed and writable
             // (`mapped_run`), the source is our host copy.
             unsafe {
