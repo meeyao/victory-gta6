@@ -5548,6 +5548,21 @@ fn direct_writes() -> bool {
     *ON.get_or_init(|| std::env::var_os("VICTORY_DIRECT_WRITES").is_none_or(|v| v != "0"))
 }
 
+/// Whether this process runs under Wine (its ntdll exports
+/// `wine_get_version`). The kernel write is a wineserver request there and a
+/// plain copy on Windows, so the fast path over committed runs is only worth
+/// its `VirtualQuery` under Wine (native Windows copy-back: 34 ms -> 3.6 s
+/// with it, fork #363).
+fn under_wine() -> bool {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| unsafe {
+        let ntdll = GetModuleHandleW(windows::core::w!("ntdll.dll"));
+        !ntdll.is_null()
+            && GetProcAddress(ntdll, windows::core::s!("wine_get_version")).is_some()
+    })
+}
+
 /// Copies host memory into title memory after a submission (what shaders
 /// wrote), leaving pages that are not mapped alone.
 pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
