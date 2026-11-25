@@ -61,7 +61,7 @@ while [ "$run" -lt "$max_runs" ]; do
     export VICTORY_CAPTURE="$work/capture-$run"
     export VICTORY_DUMP_TARGETS=1
     export VICTORY_CAPTURE_FRAMES='6500,7200'
-    export VICTORY_KEYS=$(seq 20 5 300 | awk '{printf "%s:Enter,",$1}' | sed 's/,$//')
+    export VICTORY_KEYS=$(seq 10 2 120 | awk '{k=(NR%5==1?"Enter":NR%5==2?"Space":NR%5==3?"Down":NR%5==4?"Right":"A"); printf "%s:%s,",$1,k}' | sed 's/,$//'),$((130)):Enter,$((160)):Enter,$((200)):Enter,$((240)):Enter,$((300)):Enter
     mkdir -p "$VICTORY_CAPTURE"
 
     setsid --wait "${RUNNER:-/tmp/opencode/victory-slr.sh}" runinprefix "$exe" run "$game" --execute \
