@@ -1,11 +1,106 @@
 # Findings — Linux/Proton VIctory, 2026-11-24/25
 
-**Bottom line:** the world renders; it does not run playably. 0.3–0.5 fps on
-an RTX 3070 / Ryzen 7 3700X, GPU 7–14 % busy. The frame is CPU work over
-title memory (copies, write-watch, copy-back). 30 fps needs the design change
-in "What upstream has that this tree does not", not another micro-fix.
-Everything below is dated evidence: what changed, what it measured, what was
-reverted.
+**Bottom line, 2026-11-25 end of session: the frame-rate numbers in this file are red
+herrings.** They were taken on different builds, scenes and phases (loading art vs world vs
+cutscene), on two runtimes, with and without the patched wineserver, so they are not
+comparable with each other and should not drive decisions. Several of them were measured
+while the picture was black. The real findings are about *why there is no correct picture*
+and *why the machine reboots*, and they are below in that order.
+
+## Consolidated findings (read this first)
+
+### What actually blocks a playable run, ranked
+
+1. **No presented picture on the most complete build, under our Wine stack.** KLBF Lab
+   (`PastiiJay/klbf-lab-beta`, branch `klbf-amd`, the Lab 39 test build) is the most complete
+   public build: it plays the prologue and the first mission, fixes water physics, the HUD,
+   purple blocks and more. On this machine it renders at up to ~3.8 fps for a few minutes and
+   then shows a **black screen**, both with `--console series-s` (720p + FSR) and at native
+   resolution, with no FSR installed. The log ends with `title did not finish suspending in
+   time; ending the title`. This is a host/present-path mismatch (KLBF targets a Windows D3D12
+   runtime; this machine swaps vkd3d-proton + DXVK under Wine), not a rendering workload issue.
+   A black menu is also a known KLBF behaviour ("press A"), but the picture never appeared
+   after the world load either.
+
+2. **Whole-machine reboots from NVIDIA GPU virtual-address exhaustion.** Three sessions ended
+   with the PC rebooting. The kernel log is unambiguous:
+
+   `NVRM: GPU0 nvAssertFailedNoLog: Assertion failed: NV_OK == status @ gpu_vaspace.c:1846`
+   `NVRM: intermapRegisterDmaMapping: Failed to insert new mapping node for range ...`
+
+   The title's memory model (≈1.2M lifetime views, large placed/aliased ranges, card-resident
+   copies) plus the layer's mappings exceeds the 8 GB card's VA allocator; the driver then
+   fails and takes the machine with it. This is a driver-level ceiling, not OOM.
+   The low-VA profile below avoided it in one 7-minute run (`journalctl` showed no NVRM
+   assert), but the picture was still black, so the VA problem and the presentation problem
+   are independent.
+
+3. **Rendering correctness is unfinished, independent of speed.** Shadowed areas are black
+   because the title's ray-traced lighting does not run: the BVH builder and trace programs are
+   translated and unit-tested in this fork, but never run end to end. Water physics is the same
+   class of bug and KLBF Lab has the clearest diagnosis: the GPU computes a water height map
+   each frame and the title's CPU physics reads it back; in a layer that keeps the result on
+   the card, physics reads an empty map, so boats sit on the seabed. KLBF's Lab 39 fixes it by
+   copying those textures back (ported from Geckomacabre/vx-layer) plus the XOR swizzle
+   (MiamiGame/XTP). Other confirmed render defects: purple tint on flat props, some deformed
+   faces, a hidden HUD in the stable build, black menus.
+
+4. **The "black screen" that looked like a rendering failure was often the account picker.**
+   The title's Account Picker waits for pad/keyboard input; an Enter-only script did not get
+   past it. Rotating `Enter/Space/Down/Right/A` did. Verified from window captures, not logs.
+
+### Fixes that are verified and worth keeping
+
+- **Mesh pipelines load from the pipeline library.** Without an explicit
+  `PRIMITIVE_TOPOLOGY` subobject the library refuses every mesh pipeline, so ~565 were
+  recompiled every boot and draws were dropped (measured `dropped 1098`). Restoring it made
+  the next boot report `made=0`. Upstream reached the same fix in `9c58a1c`.
+- **The card compare must be compiled with DXC.** Wine's `d3dcompiler_47` cannot lower a store
+  to a raw buffer, so `card_ready` failed once with `E_FAIL` and every host copy took the CPU
+  path. With DXC the host copies live in card memory (97 copies / 941 MB observed).
+- **The write-watch skip for guarded ranges.** `GetWriteWatch` walks ranges that are not
+  `MEM_WRITE_WATCH` before failing: 1.7–3.3 s per frame here. A guarded read-only block
+  proves the range cannot be watched; skipping the call cut the kernel time to ~0.5 s.
+- **One `VirtualProtect` per contiguous run, not per 64 KiB block.** A 60 MB put-back covered
+  ~960 blocks; per-block calls cost 1.3–1.8 s. Coalescing cut it to 0.4–0.7 s.
+- **PR #282's translator-keyed shader cache.** Offline precompilation and reuse across app
+  rebuilds; the cache key is the translator source, not the executable.
+- **The patched wineserver is the single biggest CPU win on this host.** Wine's stock server
+  keeps a process's views in a linked list walked on every map/unmap/overlap check; the
+  rb-tree patch (yayameowmeow/victory-fork, `contrib/wine`) dropped copies from
+  ~500–1400 ms to 45–185 ms. It did not fix presentation or the VA crashes.
+- **Reverts and parked work, for the record:** whole-range `memcpy` (a `VirtualQuery` per copy),
+  a 5 GiB texture cache cap (did not enable card copies), the AMD view-heap clamp on NVIDIA
+  (nulled 245k of 1.24M views), and the `a803c87` rework (parked on `keep-rework`; its captures
+  went flat black). `VICTORY_RELAY`/`VICTORY_WIDE_BACK` are risky on this card for VA reasons.
+
+### The fork landscape, as of this session
+
+- **KLBF Lab** (`PastiiJay/klbf-lab`, beta `klbf-lab-beta`) is the most complete tested stack:
+  prologue through the first mission, water fix in Lab 39, HUD fix, skip list, FSR recipe,
+  and a Wine-specific pipeline-library fix (`7afe3f7`). Its numbers are Windows/AMD, one
+  machine.
+- **fxceless/victory-fork `a253706`** has the newest frame-rate series (descriptor-sync
+  fingerprint, no failing write-watch calls, driver watch, forbidden self-copy removed).
+- **joshuudev/victory-amd**: remap lock per 16 MB / 64 addresses, same-page skip dropped,
+  frametime dump. Targets the remapping lock.
+- **zm0kiemedia/vicecitybaby** (XCL): textures no longer wait for other remaps, fence COM
+  references retained, ReBAR upload heap, readfirstlane/div-fixup/gradient shader fixes.
+- **Joaco9020/mangrove**: `VICTORY_PIPELINE_WAIT_MS=24` measured 2.5 vs 2.3 fps with fewer
+  dropped draws and copy-back 190 ms; logs what the two missing pipeline methods point at.
+- **ThatRecompDev/five-star-recomp**: compile admission by RAM, heavy compiles in a killable
+  child, BVH builder programs all translating, mesh bounds. The best source for the
+  stack-overflow and compile-memory classes.
+- **brcly/TuxBox**: fence-label deadlock fixes, slot 62/148 semantics, physical-page reads.
+
+### How to judge a run (the numbers are not the judge)
+
+1. A capture shows the world, not a flat frame or a menu.
+2. The session survives 30+ minutes with `journalctl -k` free of NVRM asserts.
+3. Water, shadows, HUD and faces behave (the list above).
+4. Only then compare frame times, over fixed scenes, with the same build and runtime.
+
+Until (1) and (2) hold, a "best fps" figure is meaningless.
 
 # GTA VI (1.0.2.1, Xbox Series) on Linux/Proton — reproduction notes
 
